@@ -23,7 +23,7 @@
   "tpu_size": 8,
 
   "bucket": "long-dep",
-  "model_dir": "gpt-j/wt103_ctx512",
+  "model_dir": "gpt-j/wt103",
 
   "train_set": "wikitext103_raw.train.index",
   "val_set": {
@@ -37,7 +37,7 @@
   "ckpt_every": 10000,
   "keep_every": 10000,
 
-  "name": "gpt-j_wt103_ctx512",
+  "name": "gpt-j_wt103",
   "wandb_project": "long-dep",
   "comment": ""
 }
