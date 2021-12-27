@@ -1,0 +1,43 @@
+{
+  "layers": 28,
+  "d_model": 4096,
+  "n_heads": 16,
+  "n_vocab": 50400,
+  "norm": "layernorm",
+  "pe": "rotary",
+  "pe_rotary_dims": 64,
+
+  "seq": 2048,
+  "ctx_len": 512,
+  "cores_per_replica": 8,
+  "per_replica_batch": 1,
+  "gradient_accumulation_steps": 32,
+
+  "total_steps": 1817,
+  "warmup_steps": 200,
+  "anneal_steps": 1617,
+  "lr": 2e-5,
+  "end_lr": 4e-6,
+  "weight_decay": 0.1,
+
+  "tpu_size": 8,
+
+  "bucket": "long-dep",
+  "model_dir": "gpt_j/ctx512",
+
+  "train_set": "wikitext103_raw.train.index",
+  "val_set": {
+    "wt103": "wikitext103_raw.val.index"
+  },
+
+  "eval_harness_tasks": [],
+
+  "val_batches": 121,
+  "val_every": 200,
+  "ckpt_every": 400,
+  "keep_every": 10000,
+
+  "name": "gpt-j_wt103_ctx512",
+  "wandb_project": "long-dep",
+  "comment": ""
+}
