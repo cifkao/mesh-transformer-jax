@@ -234,6 +234,7 @@ class TransformerLayerShard(hk.Module):
         shards = config["cores_per_replica"]
         norm = getnorm(config["norm"])
         self.is_rotary = config["pe"] == "rotary"
+        self.ctx_len = config.get("ctx_len", config["seq"])
 
         assert dim % heads == 0
         assert heads % shards == 0
@@ -304,6 +305,7 @@ class TransformerLayerShard(hk.Module):
 
         seq_len = x.shape[0]
         causal_mask = np.tril(np.ones((seq_len, seq_len)))
+        causal_mask = np.triu(causal_mask, k=-self.ctx_len + 1)
         bias = -1e10 * (1. - causal_mask)
         bias += attn_bias
 
