@@ -23,7 +23,7 @@
   "tpu_size": 8,
 
   "bucket": "long-dep",
-  "model_dir": "gpt_j/ctx512",
+  "model_dir": "gpt-j/wt103_ctx512",
 
   "train_set": "wikitext103_raw.train.index",
   "val_set": {
