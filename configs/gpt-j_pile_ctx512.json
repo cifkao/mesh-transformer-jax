@@ -27,7 +27,7 @@
 
   "train_set": "pile.train_mini.index",
   "val_set": {
-    "pile": "pile.val.index"
+    "pile": "pile.val_shuf.index"
   },
 
   "eval_harness_tasks": [],
