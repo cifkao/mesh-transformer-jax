@@ -19,7 +19,7 @@ from jax.experimental import PartitionSpec as P
 
 
 class CausalTransformerShard(hk.Module):
-    def __init__(self, config):
+    def __init__(self, config, training=False):
         super().__init__()
         heads = config["n_heads"]
         shards = config["cores_per_replica"]
@@ -35,7 +35,7 @@ class CausalTransformerShard(hk.Module):
         init_scale = 2. / layer_count
 
         for i in range(layer_count):
-            self.transformer_layers.append(TransformerLayerShard(config, name=f"layer_{i}", init_scale=init_scale))
+            self.transformer_layers.append(TransformerLayerShard(config, name=f"layer_{i}", init_scale=init_scale, training=training))
 
         self.proj = ProjectionShard(config)
 
@@ -133,7 +133,7 @@ class CausalTransformer:
 
         def train(state, ctx, tgt):
             def train_loss(x, y):
-                transformer = CausalTransformerShard(config)
+                transformer = CausalTransformerShard(config, training=True)
                 out = transformer.loss(x, y, z_loss=True)
 
                 return out["loss"], out["last_loss"]

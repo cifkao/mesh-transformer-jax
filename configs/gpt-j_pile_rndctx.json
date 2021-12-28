@@ -1,0 +1,44 @@
+{
+  "layers": 28,
+  "d_model": 4096,
+  "n_heads": 16,
+  "n_vocab": 50400,
+  "norm": "layernorm",
+  "pe": "rotary",
+  "pe_rotary_dims": 64,
+
+  "seq": 2048,
+  "ctx_len": 2048,
+  "random_ctx": true,
+  "cores_per_replica": 8,
+  "per_replica_batch": 1,
+  "gradient_accumulation_steps": 32,
+
+  "total_steps": 200,
+  "warmup_steps": 20,
+  "anneal_steps": 180,
+  "lr": 1e-5,
+  "end_lr": 2e-6,
+  "weight_decay": 0.1,
+
+  "tpu_size": 8,
+
+  "bucket": "long-dep",
+  "model_dir": "gpt-j/pile_rndctx",
+
+  "train_set": "pile.train_mini.index",
+  "val_set": {
+    "pile": "pile.val_shuf.index"
+  },
+
+  "eval_harness_tasks": [],
+
+  "val_batches": 200,
+  "val_every": 50,
+  "ckpt_every": 10000,
+  "keep_every": 10000,
+
+  "name": "gpt-j_pile_rndctx",
+  "wandb_project": "long-dep",
+  "comment": ""
+}
