@@ -19,7 +19,7 @@ from jax.experimental import PartitionSpec as P
 
 
 class CausalTransformerShard(hk.Module):
-    def __init__(self, config, training=False):
+    def __init__(self, config):
         super().__init__()
         heads = config["n_heads"]
         shards = config["cores_per_replica"]
@@ -35,7 +35,7 @@ class CausalTransformerShard(hk.Module):
         init_scale = 2. / layer_count
 
         for i in range(layer_count):
-            self.transformer_layers.append(TransformerLayerShard(config, name=f"layer_{i}", init_scale=init_scale, training=training))
+            self.transformer_layers.append(TransformerLayerShard(config, name=f"layer_{i}", init_scale=init_scale))
 
         self.proj = ProjectionShard(config)
 
@@ -120,6 +120,10 @@ class CausalTransformer:
         self.config = config
         optimizer = config["optimizer"]
 
+        max_seq_len = config["seq"]
+        max_ctx_len = config.get("ctx_len", max_seq_len)
+        is_random_ctx = config.get("random_ctx", False)
+
         def eval(state, ctx, tgt, ctx_length):
             def eval_loss(x, y, mask):
                 transformer = CausalTransformerShard(config)
@@ -132,9 +136,23 @@ class CausalTransformer:
             return eval_loss_fn(to_bf16(state["params"]), ctx, tgt, mask)
 
         def train(state, ctx, tgt):
-            def train_loss(x, y):
-                transformer = CausalTransformerShard(config, training=True)
-                out = transformer.loss(x, y, z_loss=True)
+            new_key, key = jax.random.split(state["rng_key"])
+
+            def train_loss(x, y, key=key):
+                # mask context beyond possibly random length
+                seq_len = x.shape[0]
+                if is_random_ctx:
+                    ctx_len = jax.random.choice(key, max_ctx_len) + 1
+                else:
+                    ctx_len = max_ctx_len
+
+                # replacement for jnp.triu(..., k=-ctx_len + 1) since ctx_len is not a concrete value
+                ctx_mask = jnp.triu(jnp.ones((seq_len, 2 * seq_len)))
+                ctx_mask = jax.lax.dynamic_slice(ctx_mask, (0, ctx_len - 1), (seq_len, seq_len))
+                attn_bias = -1e10 * (1. - ctx_mask)
+
+                transformer = CausalTransformerShard(config)
+                out = transformer.loss(x, y, z_loss=True, mask=attn_bias)
 
                 return out["loss"], out["last_loss"]
 
@@ -169,7 +187,8 @@ class CausalTransformer:
             return to_f32(loss), to_f32(last_loss), to_f32(grad_norm), to_f32(grad_norm_micro), {
                 "params": optax.apply_updates(state["params"], to_f32(updates)),
                 "step": state["step"] + 1,
-                "opt_state": new_opt_state
+                "opt_state": new_opt_state,
+                "rng_key": new_key
             }
 
         def init(key, x):
@@ -184,7 +203,8 @@ class CausalTransformer:
             return {
                 "params": ("early_cast" in config and to_bf16 or to_f32)(params),
                 "step": np.array(0),
-                "opt_state": optimizer.init(params)
+                "opt_state": optimizer.init(params),
+                "rng_key": key
             }
 
         def generate(state, key, ctx, ctx_length, aux, sampler_options):

@@ -227,19 +227,13 @@ class EmbeddingShardV2(hk.Module):
 
 # We actually combine the FF and dense in one layer (i.e. compute in parallel) to minimize all reduces
 class TransformerLayerShard(hk.Module):
-    def __init__(self, config, name=None, init_scale=1., training=False):
+    def __init__(self, config, name=None, init_scale=1.):
         super().__init__(name=name)
         heads = config["n_heads"]
         dim = config["d_model"]
         shards = config["cores_per_replica"]
         norm = getnorm(config["norm"])
         self.is_rotary = config["pe"] == "rotary"
-
-        ctx_len = config.get("ctx_len", config["seq"])
-        if training and config.get("random_ctx", False):
-            self.get_ctx_len = lambda key: jax.random.choice(key, ctx_len) + 1
-        else:
-            self.get_ctx_len = lambda key: ctx_len
 
         assert dim % heads == 0
         assert heads % shards == 0
@@ -309,9 +303,7 @@ class TransformerLayerShard(hk.Module):
         q, v, k = self.qvk_proj(x)
 
         seq_len = x.shape[0]
-        ctx_len = self.get_ctx_len(hk.next_rng_key())
         causal_mask = np.tril(np.ones((seq_len, seq_len)))
-        causal_mask = np.triu(causal_mask, k=-ctx_len + 1)
         bias = -1e10 * (1. - causal_mask)
         bias += attn_bias
 
