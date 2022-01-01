@@ -135,14 +135,12 @@ class CausalTransformer:
 
             return eval_loss_fn(to_bf16(state["params"]), ctx, tgt, mask)
 
-        def train(state, ctx, tgt):
-            new_key, key = jax.random.split(state["rng_key"])
-
-            def train_loss(x, y, key=key):
+        def train(state, key, ctx, tgt):
+            def train_loss(x, y):
                 # mask context beyond possibly random length
                 seq_len = x.shape[0]
                 if is_random_ctx:
-                    ctx_len = jax.random.choice(key, max_ctx_len) + 1
+                    ctx_len = jax.random.choice(hk.next_rng_key(), max_ctx_len) + 1
                 else:
                     ctx_len = max_ctx_len
 
@@ -156,27 +154,28 @@ class CausalTransformer:
 
                 return out["loss"], out["last_loss"]
 
-            train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
+            train_loss_fn = hk.transform(train_loss).apply
 
-            def microbatch(old_grad, batch):
+            def microbatch(carry, batch):
+                old_grad, key = carry
                 ctx, tgt = batch
 
+                key, subkey = jax.random.split(key)
                 val_grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)
-                (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), ctx, tgt)
+                (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), subkey, ctx, tgt)
 
                 new_grad = jax.tree_multimap(lambda a, b: a + b, old_grad, grad)
                 gnorm = global_norm(grad)
-                return new_grad, (loss, last_loss, gnorm)
+                return (new_grad, key), (loss, last_loss, gnorm)
 
             if ctx.shape[0] == 1:
                 val_grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)
-                (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), ctx[0], tgt[0])
+                (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), key, ctx[0], tgt[0])
                 gnorm = global_norm(grad)
             else:
-                grad, (loss, last_loss, gnorm) = jax.lax.scan(microbatch,
-                                                       jax.tree_map(lambda x: jnp.zeros_like(x).astype(jnp.bfloat16),
-                                                                    state["params"]),
-                                                       (ctx, tgt))
+                grad_init = jax.tree_map(lambda x: jnp.zeros_like(x).astype(jnp.bfloat16),
+                                         state["params"])
+                (grad, _), (loss, last_loss, gnorm) = jax.lax.scan(microbatch, (grad_init, key), (ctx, tgt))
 
             grad_norm_micro = jax.lax.pmean(gnorm, "batch")
 
@@ -187,8 +186,7 @@ class CausalTransformer:
             return to_f32(loss), to_f32(last_loss), to_f32(grad_norm), to_f32(grad_norm_micro), {
                 "params": optax.apply_updates(state["params"], to_f32(updates)),
                 "step": state["step"] + 1,
-                "opt_state": new_opt_state,
-                "rng_key": new_key
+                "opt_state": new_opt_state
             }
 
         def init(key, x):
@@ -203,8 +201,7 @@ class CausalTransformer:
             return {
                 "params": ("early_cast" in config and to_bf16 or to_f32)(params),
                 "step": np.array(0),
-                "opt_state": optimizer.init(params),
-                "rng_key": key
+                "opt_state": optimizer.init(params)
             }
 
         def generate(state, key, ctx, ctx_length, aux, sampler_options):
@@ -251,6 +248,7 @@ class CausalTransformer:
 
         self.train_xmap = jax.experimental.maps.xmap(fun=train,
                                                      in_axes=(["shard", ...],
+                                                              ["shard", ...],
                                                               ["batch", ...],
                                                               ["batch", ...]),
                                                      out_axes=(["batch", ...], ["batch", ...], ["batch", ...], ["batch", ...], ["shard", ...]),
@@ -272,29 +270,29 @@ class CausalTransformer:
                                                     out_axes=["shard", ...],
                                                     axis_resources={'shard': 'mp', 'batch': 'dp'})
 
-        key = hk.PRNGSequence(42)
+        self.key = hk.PRNGSequence(42)
 
         assert thread_resources.env.shape['mp'] == config["cores_per_replica"]
 
         dp = thread_resources.env.shape['dp']
         mp = thread_resources.env.shape['mp']
 
-        mp_per_host = min(mp, 8)
+        self.mp_per_host = min(mp, 8)
 
         seq = config["seq"]
         vocab = config["n_vocab"]
 
         example_shape = (max(dp // jax.host_count(), 1), seq,)
-        x = jax.random.uniform(next(key), example_shape, minval=0, maxval=vocab).astype(jnp.uint32)  # batch, len
+        x = jax.random.uniform(next(self.key), example_shape, minval=0, maxval=vocab).astype(jnp.uint32)  # batch, len
 
-        head_print("key shape", jnp.array(key.take(mp_per_host)).shape)
+        head_print("key shape", jnp.array(self.key.take(self.mp_per_host)).shape)
         head_print("in shape", x.shape)
 
         head_print("dp", dp)
         head_print("mp", mp)
 
         self.gen_length = 1
-        self.state = self.init_xmap(jnp.array(key.take(mp_per_host)), x)
+        self.state = self.init_xmap(jnp.array(self.key.take(self.mp_per_host)), x)
 
         param_count = hk.data_structures.tree_size(self.state['params'])
         head_print(f"Total parameters: {param_count}")
@@ -318,7 +316,8 @@ class CausalTransformer:
         # assert (sample["obs"][:, 1:] == sample["target"][:, -1])
 
         # start = time.time()
-        loss, last_loss, grad_norm, grad_norm_micro, self.state = self.train_xmap(self.state, obs, target)
+        loss, last_loss, grad_norm, grad_norm_micro, self.state = self.train_xmap(
+            self.state, jnp.array(self.key.take(self.mp_per_host)), obs, target)
         loss = np.array(loss)
         last_loss = np.array(last_loss)
         grad_norm = np.array(grad_norm)
