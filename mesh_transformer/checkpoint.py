@@ -60,6 +60,9 @@ def write_ckpt(pytree, dir, shard):
 
     flattened, structure = jax.tree_flatten(pytree)
 
+    with open(f"{dir}structure", "w") as f:
+        print(structure, file=f)
+
     start = time.time()
     # cpu_flattened = jax.device_put(flattened, cpu_device)
     cpu_flattened = index_weights(flattened, shard)
